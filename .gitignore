@@ -1,0 +1,23 @@
+# Python environment
+venv/
+env/
+ENV/
+.venv/
+
+# Environment variables & secrets
+.env
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Logs & temp files
+*.log
+sync.log
+scratch/
