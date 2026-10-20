@@ -17,6 +17,13 @@ load_dotenv()
 API_KEY = os.getenv("TMDB_API_KEY")
 BASE_URL = "https://api.themoviedb.org/3"
 
+if not API_KEY:
+    print("=" * 60)
+    print("ERROR: TMDB_API_KEY is not set or empty!")
+    print("• For local runs: Add TMDB_API_KEY=<your_key> to .env")
+    print("• For GitHub Actions: Add TMDB_API_KEY secret under Settings -> Secrets and variables -> Actions")
+    print("=" * 60)
+
 # Offline operation can be controlled via environment variables if desired
 # Defaults to normal online/cached behavior for seamless GitHub Actions & local runs
 
@@ -239,6 +246,9 @@ def sync_new_releases(days_back=30, max_pages=3, dry_run=False, specific_ids=Non
     dataset_file = "data/model_movies_v2.csv"
     if not os.path.exists(dataset_file):
         raise FileNotFoundError(f"{dataset_file} not found. Please initialize dataset first.")
+
+    if not API_KEY:
+        raise ValueError("TMDB_API_KEY environment variable is missing or empty! Please configure TMDB_API_KEY in .env or GitHub Secrets.")
 
     df_existing = pd.read_csv(dataset_file).fillna("")
     existing_ids = set(df_existing["tmdb_id"].astype(int))
