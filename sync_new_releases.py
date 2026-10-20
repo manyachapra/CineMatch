@@ -38,8 +38,10 @@ def fetch_candidate_releases(session, days_back=30, max_pages=3):
 
     candidates = []
 
-    # 1. Discover Movies (English & Hindi)
-    for lang in ["en", "hi"]:
+    languages = ["en", "hi", "ta", "te", "ml"]
+
+    # 1. Discover Movies
+    for lang in languages:
         for page in range(1, max_pages + 1):
             params = {
                 "api_key": API_KEY,
@@ -73,8 +75,8 @@ def fetch_candidate_releases(session, days_back=30, max_pages=3):
                 break
             time.sleep(0.2)
 
-    # 2. Discover TV / Web Series (English & Hindi)
-    for lang in ["en", "hi"]:
+    # 2. Discover TV / Web Series
+    for lang in languages:
         for page in range(1, max_pages + 1):
             params = {
                 "api_key": API_KEY,
@@ -107,6 +109,26 @@ def fetch_candidate_releases(session, days_back=30, max_pages=3):
                 print(f"Warning: Failed to fetch discover TV ({lang}, p{page}): {e}")
                 break
             time.sleep(0.2)
+
+    # 3. Trending this week (captures viral hits regardless of language)
+    for endpoint, m_type in [("movie", "movie"), ("tv", "series")]:
+        try:
+            res = session.get(f"{BASE_URL}/trending/{endpoint}/week", params={"api_key": API_KEY}, timeout=15)
+            if res.status_code == 200:
+                for item in res.json().get("results", []):
+                    candidates.append({
+                        "tmdb_id": item["id"],
+                        "title": item.get("title") or item.get("name") or item.get("original_title"),
+                        "description": item.get("overview", ""),
+                        "genres": item.get("genre_ids", []),
+                        "language": item.get("original_language"),
+                        "release_date": item.get("release_date") or item.get("first_air_date"),
+                        "rating": item.get("vote_average", 0),
+                        "poster": item.get("poster_path"),
+                        "type": m_type
+                    })
+        except Exception as e:
+            print(f"Warning: Failed to fetch trending {endpoint}: {e}")
 
     return candidates
 
@@ -152,9 +174,67 @@ def enrich_item(session, item):
         return enriched
 
 
-def sync_new_releases(days_back=30, max_pages=3, dry_run=False):
+def fetch_candidates_by_ids(session, tmdb_ids):
+    """Fetch specific titles by TMDB ID."""
+    candidates = []
+    for mid in tmdb_ids:
+        found = False
+        for media_type in ["movie", "tv"]:
+            url = f"{BASE_URL}/{media_type}/{mid}"
+            try:
+                res = session.get(url, params={"api_key": API_KEY}, timeout=15)
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates.append({
+                        "tmdb_id": data["id"],
+                        "title": data.get("title") or data.get("name") or data.get("original_title"),
+                        "description": data.get("overview", ""),
+                        "genres": [g["id"] for g in data.get("genres", [])],
+                        "language": data.get("original_language"),
+                        "release_date": data.get("release_date") or data.get("first_air_date"),
+                        "rating": data.get("vote_average", 0),
+                        "poster": data.get("poster_path"),
+                        "type": "movie" if media_type == "movie" else "series"
+                    })
+                    found = True
+                    break
+            except Exception as e:
+                print(f"Error fetching ID {mid} ({media_type}): {e}")
+        if not found:
+            print(f"Warning: TMDB ID {mid} not found on TMDB.")
+    return candidates
+
+
+def fetch_candidates_by_query(session, query, max_results=5):
+    """Search TMDB for specific title queries."""
+    candidates = []
+    for media_type in ["movie", "tv"]:
+        url = f"{BASE_URL}/search/{media_type}"
+        try:
+            res = session.get(url, params={"api_key": API_KEY, "query": query}, timeout=15)
+            if res.status_code == 200:
+                data = res.json()
+                for item in data.get("results", [])[:max_results]:
+                    candidates.append({
+                        "tmdb_id": item["id"],
+                        "title": item.get("title") or item.get("name") or item.get("original_title"),
+                        "description": item.get("overview", ""),
+                        "genres": item.get("genre_ids", []),
+                        "language": item.get("original_language"),
+                        "release_date": item.get("release_date") or item.get("first_air_date"),
+                        "rating": item.get("vote_average", 0),
+                        "poster": item.get("poster_path"),
+                        "type": "movie" if media_type == "movie" else "series"
+                    })
+        except Exception as e:
+            print(f"Error searching for '{query}' ({media_type}): {e}")
+    return candidates
+
+
+def sync_new_releases(days_back=30, max_pages=3, dry_run=False, specific_ids=None, query=None):
     """
     Main function to discover, filter, enrich, and incrementally embed new releases.
+    Supports time-based discovery, specific TMDB IDs, or title search queries.
     """
     dataset_file = "data/model_movies_v2.csv"
     if not os.path.exists(dataset_file):
@@ -164,10 +244,18 @@ def sync_new_releases(days_back=30, max_pages=3, dry_run=False):
     existing_ids = set(df_existing["tmdb_id"].astype(int))
 
     print(f"Catalog currently has {len(df_existing)} titles.")
-    print(f"Checking TMDB for releases from the last {days_back} days...")
-
     session = requests.Session()
-    candidates = fetch_candidate_releases(session, days_back=days_back, max_pages=max_pages)
+
+    if specific_ids:
+        print(f"Fetching {len(specific_ids)} specific TMDB IDs: {specific_ids}...")
+        candidates = fetch_candidates_by_ids(session, specific_ids)
+    elif query:
+        print(f"Searching TMDB for: '{query}'...")
+        candidates = fetch_candidates_by_query(session, query)
+    else:
+        print(f"Checking TMDB for releases from the last {days_back} days...")
+        candidates = fetch_candidate_releases(session, days_back=days_back, max_pages=max_pages)
+
     print(f"Fetched {len(candidates)} raw candidates from TMDB.")
 
     # 1. Deduplicate against existing catalog and within the batch
@@ -308,7 +396,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Automatically sync new movie & series launches from TMDB into CineMatch")
     parser.add_argument("--days", type=int, default=30, help="Number of days back to check for releases (default: 30)")
     parser.add_argument("--pages", type=int, default=3, help="Max pages per category to inspect (default: 3)")
+    parser.add_argument("--ids", nargs="+", type=int, help="Specific TMDB IDs to fetch and add")
+    parser.add_argument("--query", type=str, help="Search query to find and add specific titles from TMDB")
     parser.add_argument("--dry-run", action="store_true", help="Inspect what would be added without modifying files")
     args = parser.parse_args()
 
-    sync_new_releases(days_back=args.days, max_pages=args.pages, dry_run=args.dry_run)
+    sync_new_releases(days_back=args.days, max_pages=args.pages, dry_run=args.dry_run, specific_ids=args.ids, query=args.query)

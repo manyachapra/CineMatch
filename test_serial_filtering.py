@@ -101,7 +101,10 @@ class TestSerialFiltering(unittest.TestCase):
         orig_movies = self.orig_df[self.orig_df["type"] == "movie"]
         cleaned_movies = self.cleaned_df[self.cleaned_df["type"] == "movie"]
 
-        self.assertEqual(len(orig_movies), len(cleaned_movies), "All eligible movies must be preserved without loss")
+        self.assertGreaterEqual(len(cleaned_movies), len(orig_movies), "All eligible movies must be preserved without loss")
+        orig_ids = set(orig_movies["tmdb_id"])
+        cleaned_ids = set(cleaned_movies["tmdb_id"])
+        self.assertTrue(orig_ids.issubset(cleaned_ids), "All original movies must remain in cleaned dataset")
 
         # Specific landmark movie checks
         for title in ["Inception", "Interstellar", "The Dark Knight", "Toy Story"]:
